@@ -73,7 +73,11 @@ def get_args_parser(subparsers):
     subparsers.add_argument('--num_tasks', default=2, type=int, help='number of sequential tasks (deepfake generation methods)')
     subparsers.add_argument('--deepfake_tasks', default=['biggan', 'gaugan'], type=str, nargs='+', help='list of deepfake tasks to use for training')
     subparsers.add_argument('--train_mask', default=True, type=bool, help='if using the class mask at training')
-    subparsers.add_argument('--task_inc', default=False, type=bool, help='if doing task incremental learning')
+    subparsers.add_argument('--task_inc', default=True, type=bool, help='if doing task incremental learning')
+    
+    # Binary evaluation for deepfake datasets
+    subparsers.add_argument('--binary_evaluation', default=True, type=bool, help='use binary evaluation for deepfake (even=real, odd=fake)')
+    subparsers.add_argument('--class_num_binary', default=2, type=int, help='number of classes for binary evaluation (2 for real/fake)')
 
     # G-Prompt parameters
     subparsers.add_argument('--use_g_prompt', default=True, type=bool, help='if using G-Prompt')

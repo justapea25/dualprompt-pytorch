@@ -20,6 +20,7 @@ import datetime
 
 import torch
 import torch.distributed as dist
+import numpy as np
 
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
@@ -242,3 +243,56 @@ def init_distributed_mode(args):
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
+
+
+def accuracy_binary(y_pred, y_true, class_num=2):
+    """
+    Binary accuracy function for deepfake evaluation.
+    Converts multi-class labels to binary (even=real, odd=fake) and computes accuracy.
+    
+    Args:
+        y_pred: predicted labels
+        y_true: true labels  
+        class_num: number of classes per task (2 for real/fake)
+        
+    Returns:
+        accuracy as percentage
+    """
+    assert len(y_pred) == len(y_true), 'Data length error.'
+    return np.around((y_pred % class_num == y_true % class_num).sum() * 100 / len(y_true), decimals=2)
+
+def accuracy_binary_detailed(y_pred, y_true, nb_old, increment=2, class_num=2):
+    """
+    Detailed binary accuracy function similar to S-Prompts accuracy_domain.
+    Provides task-wise, old/new accuracy breakdown.
+    
+    Args:
+        y_pred: predicted labels
+        y_true: true labels
+        nb_old: number of old classes seen so far
+        increment: classes per task (2 for real/fake pairs)
+        class_num: number of classes for binary evaluation (2)
+        
+    Returns:
+        dictionary with detailed accuracy breakdown
+    """
+    assert len(y_pred) == len(y_true), 'Data length error.'
+    all_acc = {}
+    all_acc['total'] = np.around((y_pred % class_num == y_true % class_num).sum() * 100 / len(y_true), decimals=2)
+
+    # Grouped accuracy by tasks
+    for class_id in range(0, np.max(y_true), increment):
+        idxes = np.where(np.logical_and(y_true >= class_id, y_true < class_id + increment))[0]
+        if len(idxes) > 0:
+            label = '{}-{}'.format(str(class_id).rjust(2, '0'), str(class_id+increment-1).rjust(2, '0'))
+            all_acc[label] = np.around(((y_pred[idxes] % class_num) == (y_true[idxes] % class_num)).sum() * 100 / len(idxes), decimals=2)
+
+    # Old accuracy (previous tasks)
+    idxes = np.where(y_true < nb_old)[0]
+    all_acc['old'] = 0 if len(idxes) == 0 else np.around(((y_pred[idxes] % class_num) == (y_true[idxes] % class_num)).sum() * 100 / len(idxes), decimals=2)
+
+    # New accuracy (current task)
+    idxes = np.where(y_true >= nb_old)[0]
+    all_acc['new'] = np.around(((y_pred[idxes] % class_num) == (y_true[idxes] % class_num)).sum() * 100 / len(idxes), decimals=2)
+
+    return all_acc

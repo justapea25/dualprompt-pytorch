@@ -26,6 +26,82 @@ from timm.optim import create_optimizer
 
 import utils
 
+def binary_accuracy(output, target, class_num=2, topk=(1,)):
+    """Computes the accuracy over the k top predictions for binary classification"""
+    with torch.no_grad():
+        maxk = max(topk)
+        # Fix: Limit maxk to available number of classes to avoid "index k out of range" error
+        maxk = min(maxk, output.size(1))
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        
+        # Convert to binary: even labels = real (0), odd labels = fake (1)
+        pred_binary = pred % class_num
+        target_binary = target.view(1, -1).expand_as(pred) % class_num
+        correct = pred_binary.eq(target_binary)
+
+        res = []
+        for k in topk:
+            # Fix: Also limit k to available classes
+            k = min(k, output.size(1))
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
+def accuracy_binary(y_pred, y_true, class_num=2):
+    """
+    Binary accuracy function for deepfake evaluation.
+    Converts multi-class labels to binary (even=real, odd=fake) and computes accuracy.
+    
+    Args:
+        y_pred: predicted labels
+        y_true: true labels  
+        class_num: number of classes per task (2 for real/fake)
+        
+    Returns:
+        accuracy as percentage
+    """
+    assert len(y_pred) == len(y_true), 'Data length error.'
+    return np.around((y_pred % class_num == y_true % class_num).sum() * 100 / len(y_true), decimals=2)
+
+def accuracy_binary_detailed(y_pred, y_true, nb_old, increment=2, class_num=2):
+    """
+    Detailed binary accuracy function similar to S-Prompts accuracy_domain.
+    Provides task-wise, old/new accuracy breakdown.
+    
+    Args:
+        y_pred: predicted labels
+        y_true: true labels
+        nb_old: number of old classes seen so far
+        increment: classes per task (2 for real/fake pairs)
+        class_num: number of classes for binary evaluation (2)
+        
+    Returns:
+        dictionary with detailed accuracy breakdown
+    """
+    assert len(y_pred) == len(y_true), 'Data length error.'
+    all_acc = {}
+    all_acc['total'] = np.around((y_pred % class_num == y_true % class_num).sum() * 100 / len(y_true), decimals=2)
+
+    # Grouped accuracy by tasks
+    for class_id in range(0, np.max(y_true), increment):
+        idxes = np.where(np.logical_and(y_true >= class_id, y_true < class_id + increment))[0]
+        if len(idxes) > 0:
+            label = '{}-{}'.format(str(class_id).rjust(2, '0'), str(class_id+increment-1).rjust(2, '0'))
+            all_acc[label] = np.around(((y_pred[idxes] % class_num) == (y_true[idxes] % class_num)).sum() * 100 / len(idxes), decimals=2)
+
+    # Old accuracy (previous tasks)
+    idxes = np.where(y_true < nb_old)[0]
+    all_acc['old'] = 0 if len(idxes) == 0 else np.around(((y_pred[idxes] % class_num) == (y_true[idxes] % class_num)).sum() * 100 / len(idxes), decimals=2)
+
+    # New accuracy (current task)
+    idxes = np.where(y_true >= nb_old)[0]
+    all_acc['new'] = np.around(((y_pred[idxes] % class_num) == (y_true[idxes] % class_num)).sum() * 100 / len(idxes), decimals=2)
+
+    return all_acc
+
 def train_one_epoch(model: torch.nn.Module, original_model: torch.nn.Module, 
                     criterion, data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0,
@@ -57,7 +133,8 @@ def train_one_epoch(model: torch.nn.Module, original_model: torch.nn.Module,
         logits = output['logits']
 
         # here is the trick to mask out classes of non-current tasks
-        if args.train_mask and class_mask is not None:
+        # BUT: disable class masking for deepfake binary evaluation
+        if args.train_mask and class_mask is not None and not (getattr(args, 'binary_evaluation', False) and 'Deepfake' in args.dataset):
             mask = class_mask[task_id]
             not_mask = np.setdiff1d(np.arange(args.nb_classes), mask)
             not_mask = torch.tensor(not_mask, dtype=torch.int64).to(device)
@@ -67,7 +144,20 @@ def train_one_epoch(model: torch.nn.Module, original_model: torch.nn.Module,
         if args.pull_constraint and 'reduce_sim' in output:
             loss = loss - args.pull_constraint_coeff * output['reduce_sim']
 
-        acc1, acc5 = accuracy(logits, target, topk=(1, 5))
+        # Use binary accuracy for deepfake datasets - FIX: check for both Deepfake and Split-Deepfake
+        is_deepfake = 'Deepfake' in args.dataset
+        use_binary = getattr(args, 'binary_evaluation', False)
+        # print(f"DEBUG: dataset={args.dataset}, binary_evaluation={use_binary}, is_deepfake={is_deepfake}")
+
+        if use_binary and is_deepfake:
+            # For binary classification, only top-1 accuracy makes sense
+            acc1_list = binary_accuracy(logits, target, class_num=getattr(args, 'class_num_binary', 2), topk=(1,))
+            acc1 = acc1_list[0]
+            acc5 = acc1  # Set acc5 = acc1 for binary classification
+            # print(f"DEBUG: Using binary accuracy - acc1={acc1}, target_sample={target[:5]}, pred_sample={torch.argmax(logits, dim=1)[:5]}")
+        else:
+            acc1, acc5 = accuracy(logits, target, topk=(1, 5))
+            # print(f"DEBUG: Using standard accuracy - acc1={acc1}")
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()))
@@ -87,6 +177,7 @@ def train_one_epoch(model: torch.nn.Module, original_model: torch.nn.Module,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
+
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
@@ -108,7 +199,6 @@ def evaluate(model: torch.nn.Module, original_model: torch.nn.Module, data_loade
             target = target.to(device, non_blocking=True)
 
             # compute output
-
             if original_model is not None:
                 output = original_model(input)
                 cls_features = output['pre_logits']
@@ -128,7 +218,18 @@ def evaluate(model: torch.nn.Module, original_model: torch.nn.Module, data_loade
 
             loss = criterion(logits, target)
 
-            acc1, acc5 = accuracy(logits, target, topk=(1, 5))
+            # Use binary accuracy for deepfake datasets - FIX: check for both Deepfake and Split-Deepfake
+            is_deepfake = 'Deepfake' in args.dataset
+            use_binary = getattr(args, 'binary_evaluation', False)
+            # print(f"DEBUG: dataset={args.dataset}, binary_evaluation={use_binary}, is_deepfake={is_deepfake}")
+
+            if use_binary and is_deepfake:
+                # For binary classification, only top-1 accuracy makes sense  
+                acc1_list = binary_accuracy(logits, target, class_num=getattr(args, 'class_num_binary', 2), topk=(1,))
+                acc1 = acc1_list[0]
+                acc5 = acc1  # Set acc5 = acc1 for binary classification
+            else:
+                acc1, acc5 = accuracy(logits, target, topk=(1, 5))
 
             metric_logger.meters['Loss'].update(loss.item())
             metric_logger.meters['Acc@1'].update(acc1.item(), n=input.shape[0])
