@@ -712,84 +712,96 @@ class Deepfake(torch.utils.data.Dataset):
         self.target_transform = target_transform
         self.train = train
         self.selected_tasks = selected_tasks
-
-        # Expected directory structure:
-        # root/
-        #   train/
-        #     task1_name/
-        #       real/
-        #       fake/
-        #     task2_name/
-        #       real/
-        #       fake/
-        #   test/
-        #     task1_name/
-        #       real/
-        #       fake/
-
-        if self.train:
-            fpath = os.path.join(root, 'train')
-        else:
-            fpath = os.path.join(root, 'test')
-
+        
+        self.split = 'train' if train else 'test'
+        self.data = []
+        self.targets = []
+        
+        # Load data
+        self._load_data()
+        
+        # Convert to tensor for consistency
+        self.targets = torch.LongTensor(self.targets)
+        
+        # Create classes list for compatibility
+        self.classes = []
+        for task_id, task_name in enumerate(self.task_names):
+            self.classes.extend([f"{task_name}_real", f"{task_name}_fake"])
+    
+    def _load_data(self):
+        """Load data for selected tasks"""
+        fpath = os.path.join(self.root, self.split)
+        
         if not os.path.exists(fpath):
-            raise RuntimeError(f"Dataset path {fpath} not found. Please check your data-path argument.")
-
-        # Create a flat structure with selected classes
-        self._organize_dataset(fpath)
+            raise RuntimeError(f"Dataset path {fpath} not found.")
         
-        # Use the organized path
-        tasks_str = '_'.join(sorted(self.selected_tasks)) if self.selected_tasks else 'all'
-        organized_path = os.path.join(fpath, f'organized_{tasks_str}')
-        self.data = datasets.ImageFolder(organized_path, transform=transform)
-
-    def _organize_dataset(self, fpath):
-        """Organize deepfake dataset into a flat structure for ImageFolder"""
-        # Use selected tasks hash for organized folder name to avoid conflicts
-        tasks_str = '_'.join(sorted(self.selected_tasks)) if self.selected_tasks else 'all'
-        organized_path = os.path.join(fpath, f'organized_{tasks_str}')
+        # Get available tasks
+        all_tasks = [d for d in os.listdir(fpath) 
+                    if os.path.isdir(os.path.join(fpath, d))]
+        all_tasks.sort()
         
-        # Only organize if not already done
-        if os.path.exists(organized_path):
-            return
-            
-        os.makedirs(organized_path, exist_ok=True)
-        
-        # Get all available task directories
-        all_task_dirs = [d for d in os.listdir(fpath) 
-                        if os.path.isdir(os.path.join(fpath, d)) and not d.startswith('organized')]
-        all_task_dirs.sort()  # Ensure consistent ordering
-        
-        # Filter to selected tasks if specified
+        # Filter to selected tasks
         if self.selected_tasks:
-            task_dirs = [d for d in all_task_dirs if d in self.selected_tasks]
-            # Ensure all selected tasks exist
-            missing_tasks = [task for task in self.selected_tasks if task not in all_task_dirs]
-            if missing_tasks:
-                raise RuntimeError(f"Selected tasks not found in dataset: {missing_tasks}. Available tasks: {all_task_dirs}")
+            self.task_names = [t for t in all_tasks if t in self.selected_tasks]
+            missing = [t for t in self.selected_tasks if t not in all_tasks]
+            if missing:
+                raise RuntimeError(f"Tasks not found: {missing}. Available: {all_tasks}")
         else:
-            task_dirs = all_task_dirs
+            self.task_names = all_tasks
+            
+        print(f"Available tasks: {all_tasks}")
+        print(f"Using tasks: {self.task_names}")
         
-        print(f"Available tasks: {all_task_dirs}")
-        print(f"Using tasks: {task_dirs}")
+        # Load data for each task
+        for task_id, task_name in enumerate(self.task_names):
+            self._load_task_data(task_id, task_name)
+    
+    def _load_task_data(self, task_id, task_name):
+        """Load data for a specific task"""
+        task_path = os.path.join(self.root, self.split, task_name)
+        real_count = 0
+        fake_count = 0
         
-        # Create symlinks for each task's real/fake classes
-        for task_id, task_name in enumerate(task_dirs):
-            task_path = os.path.join(fpath, task_name)
+        # Load real images (label = 2 * task_id)
+        real_path = os.path.join(task_path, 'real')
+        if os.path.exists(real_path):
+            for img_name in os.listdir(real_path):
+                if img_name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+                    self.data.append(os.path.join(real_path, img_name))
+                    self.targets.append(2 * task_id)  # Real class for this task
+                    real_count += 1
+        
+        # Load fake images (label = 2 * task_id + 1)  
+        fake_path = os.path.join(task_path, 'fake')
+        if os.path.exists(fake_path):
+            for img_name in os.listdir(fake_path):
+                if img_name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+                    self.data.append(os.path.join(fake_path, img_name))
+                    self.targets.append(2 * task_id + 1)  # Fake class for this task
+                    fake_count += 1
+                    
+        print(f"[{task_name}] {self.split} split - Real: {real_count}, Fake: {fake_count}")
+    
+    def __getitem__(self, index):
+        path = self.data[index]
+        target = self.targets[index]
+        
+        # Load image
+        try:
+            from PIL import Image
+            img = Image.open(path).convert('RGB')
+        except Exception as e:
+            print(f"Error loading {path}: {e}")
+            # Fallback to black image
+            img = Image.new('RGB', (224, 224), (0, 0, 0))
+        
+        if self.transform is not None:
+            img = self.transform(img)
             
-            # Create class directories
-            real_class_name = f"{task_id:02d}_{task_name}_real"
-            fake_class_name = f"{task_id:02d}_{task_name}_fake"
+        if self.target_transform is not None:
+            target = self.target_transform(target)
             
-            real_organized_dir = os.path.join(organized_path, real_class_name)
-            fake_organized_dir = os.path.join(organized_path, fake_class_name)
-            
-            # Create symlinks to original data
-            real_src = os.path.join(task_path, 'real')
-            fake_src = os.path.join(task_path, 'fake')
-            
-            if os.path.exists(real_src) and not os.path.exists(real_organized_dir):
-                os.symlink(os.path.abspath(real_src), real_organized_dir)
-            
-            if os.path.exists(fake_src) and not os.path.exists(fake_organized_dir):
-                os.symlink(os.path.abspath(fake_src), fake_organized_dir)
+        return img, target
+    
+    def __len__(self):
+        return len(self.data)

@@ -160,8 +160,8 @@ def get_dataset(dataset, transform_train, transform_val, args,):
             raise ValueError(f"Number of selected deepfake tasks ({len(selected_tasks)}) must match num_tasks ({args.num_tasks}). "
                            f"Selected tasks: {selected_tasks}")
         
-        dataset_train = Deepfake(args.data_path, train=True, download=True, transform=transform_train, selected_tasks=selected_tasks).data
-        dataset_val = Deepfake(args.data_path, train=False, download=True, transform=transform_val, selected_tasks=selected_tasks).data
+        dataset_train = Deepfake(args.data_path, train=True, download=True, transform=transform_train, selected_tasks=selected_tasks)
+        dataset_val = Deepfake(args.data_path, train=False, download=True, transform=transform_val, selected_tasks=selected_tasks)
     
     else:
         raise ValueError('Dataset {} not found.'.format(dataset))
