@@ -704,3 +704,77 @@ class Imagenet_R(torch.utils.data.Dataset):
         for c in self.dataset.classes:
             path = os.path.join(self.fpath, c)
             rmtree(path)
+
+class Deepfake(torch.utils.data.Dataset):
+    def __init__(self, root, train=True, transform=None, target_transform=None, download=False):        
+        self.root = os.path.expanduser(root)
+        self.transform = transform
+        self.target_transform = target_transform
+        self.train = train
+
+        # Expected directory structure:
+        # root/
+        #   train/
+        #     task1_name/
+        #       real/
+        #       fake/
+        #     task2_name/
+        #       real/
+        #       fake/
+        #   test/
+        #     task1_name/
+        #       real/
+        #       fake/
+
+        if self.train:
+            fpath = os.path.join(root, 'train')
+        else:
+            fpath = os.path.join(root, 'test')
+
+        if not os.path.exists(fpath):
+            raise RuntimeError(f"Dataset path {fpath} not found. Please check your data-path argument.")
+
+        # Create a flat structure with all classes
+        self._organize_dataset(fpath)
+        
+        # Use the organized path
+        organized_path = os.path.join(fpath, 'organized')
+        self.data = datasets.ImageFolder(organized_path, transform=transform)
+
+    def _organize_dataset(self, fpath):
+        """Organize deepfake dataset into a flat structure for ImageFolder"""
+        organized_path = os.path.join(fpath, 'organized')
+        
+        # Only organize if not already done
+        if os.path.exists(organized_path):
+            return
+            
+        os.makedirs(organized_path, exist_ok=True)
+        
+        # Get all task directories
+        task_dirs = [d for d in os.listdir(fpath) 
+                    if os.path.isdir(os.path.join(fpath, d)) and d != 'organized']
+        task_dirs.sort()  # Ensure consistent ordering
+        
+        print(f"Found tasks: {task_dirs}")
+        
+        # Create symlinks for each task's real/fake classes
+        for task_id, task_name in enumerate(task_dirs):
+            task_path = os.path.join(fpath, task_name)
+            
+            # Create class directories
+            real_class_name = f"{task_id:02d}_{task_name}_real"
+            fake_class_name = f"{task_id:02d}_{task_name}_fake"
+            
+            real_organized_dir = os.path.join(organized_path, real_class_name)
+            fake_organized_dir = os.path.join(organized_path, fake_class_name)
+            
+            # Create symlinks to original data
+            real_src = os.path.join(task_path, 'real')
+            fake_src = os.path.join(task_path, 'fake')
+            
+            if os.path.exists(real_src) and not os.path.exists(real_organized_dir):
+                os.symlink(os.path.abspath(real_src), real_organized_dir)
+            
+            if os.path.exists(fake_src) and not os.path.exists(fake_organized_dir):
+                os.symlink(os.path.abspath(fake_src), fake_organized_dir)
