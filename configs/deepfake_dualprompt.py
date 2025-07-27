@@ -70,7 +70,8 @@ def get_args_parser(subparsers):
     subparsers.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     # Continual learning parameters
-    subparsers.add_argument('--num_tasks', default=12, type=int, help='number of sequential tasks (deepfake generation methods)')
+    subparsers.add_argument('--num_tasks', default=2, type=int, help='number of sequential tasks (deepfake generation methods)')
+    subparsers.add_argument('--deepfake_tasks', default=['biggan', 'gaugan'], type=str, nargs='+', help='list of deepfake tasks to use for training')
     subparsers.add_argument('--train_mask', default=True, type=bool, help='if using the class mask at training')
     subparsers.add_argument('--task_inc', default=False, type=bool, help='if doing task incremental learning')
 

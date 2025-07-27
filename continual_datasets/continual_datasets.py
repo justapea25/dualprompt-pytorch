@@ -706,11 +706,12 @@ class Imagenet_R(torch.utils.data.Dataset):
             rmtree(path)
 
 class Deepfake(torch.utils.data.Dataset):
-    def __init__(self, root, train=True, transform=None, target_transform=None, download=False):        
+    def __init__(self, root, train=True, transform=None, target_transform=None, download=False, selected_tasks=None):        
         self.root = os.path.expanduser(root)
         self.transform = transform
         self.target_transform = target_transform
         self.train = train
+        self.selected_tasks = selected_tasks
 
         # Expected directory structure:
         # root/
@@ -734,16 +735,19 @@ class Deepfake(torch.utils.data.Dataset):
         if not os.path.exists(fpath):
             raise RuntimeError(f"Dataset path {fpath} not found. Please check your data-path argument.")
 
-        # Create a flat structure with all classes
+        # Create a flat structure with selected classes
         self._organize_dataset(fpath)
         
         # Use the organized path
-        organized_path = os.path.join(fpath, 'organized')
+        tasks_str = '_'.join(sorted(self.selected_tasks)) if self.selected_tasks else 'all'
+        organized_path = os.path.join(fpath, f'organized_{tasks_str}')
         self.data = datasets.ImageFolder(organized_path, transform=transform)
 
     def _organize_dataset(self, fpath):
         """Organize deepfake dataset into a flat structure for ImageFolder"""
-        organized_path = os.path.join(fpath, 'organized')
+        # Use selected tasks hash for organized folder name to avoid conflicts
+        tasks_str = '_'.join(sorted(self.selected_tasks)) if self.selected_tasks else 'all'
+        organized_path = os.path.join(fpath, f'organized_{tasks_str}')
         
         # Only organize if not already done
         if os.path.exists(organized_path):
@@ -751,12 +755,23 @@ class Deepfake(torch.utils.data.Dataset):
             
         os.makedirs(organized_path, exist_ok=True)
         
-        # Get all task directories
-        task_dirs = [d for d in os.listdir(fpath) 
-                    if os.path.isdir(os.path.join(fpath, d)) and d != 'organized']
-        task_dirs.sort()  # Ensure consistent ordering
+        # Get all available task directories
+        all_task_dirs = [d for d in os.listdir(fpath) 
+                        if os.path.isdir(os.path.join(fpath, d)) and not d.startswith('organized')]
+        all_task_dirs.sort()  # Ensure consistent ordering
         
-        print(f"Found tasks: {task_dirs}")
+        # Filter to selected tasks if specified
+        if self.selected_tasks:
+            task_dirs = [d for d in all_task_dirs if d in self.selected_tasks]
+            # Ensure all selected tasks exist
+            missing_tasks = [task for task in self.selected_tasks if task not in all_task_dirs]
+            if missing_tasks:
+                raise RuntimeError(f"Selected tasks not found in dataset: {missing_tasks}. Available tasks: {all_task_dirs}")
+        else:
+            task_dirs = all_task_dirs
+        
+        print(f"Available tasks: {all_task_dirs}")
+        print(f"Using tasks: {task_dirs}")
         
         # Create symlinks for each task's real/fake classes
         for task_id, task_name in enumerate(task_dirs):
