@@ -55,10 +55,11 @@ def main(args):
     )
 
     print(f"Creating model: {args.model}")
+    # Use args.nb_classes for ALL datasets (including Deepfake which is now 2)
     model = create_model(
         args.model,
         pretrained=args.pretrained,
-        num_classes=args.nb_classes,
+        num_classes=args.nb_classes,  # Will be 2 for Deepfake
         drop_rate=args.drop,
         drop_path_rate=args.drop_path,
         drop_block_rate=None,

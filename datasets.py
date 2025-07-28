@@ -37,13 +37,56 @@ def build_continual_dataloader(args):
     transform_train = build_transform(True, args)
     transform_val = build_transform(False, args)
 
-    if args.dataset.startswith('Split-'):
+    if args.dataset == 'Deepfake':
+        # Set binary classification
+        args.nb_classes = 2
+        
+        # Create task-specific dataloaders
+        for i in range(args.num_tasks):
+            # Require deepfake_tasks to be specified
+            if not hasattr(args, 'deepfake_tasks') or i >= len(args.deepfake_tasks):
+                raise ValueError(f"deepfake_tasks must specify {args.num_tasks} tasks")
+            
+            task_name = args.deepfake_tasks[i]
+            
+            # Create task-specific datasets
+            task_train = Deepfake(args.data_path, train=True, transform=transform_train, 
+                                 selected_tasks=[task_name])
+            task_val = Deepfake(args.data_path, train=False, transform=transform_val, 
+                               selected_tasks=[task_name])
+            
+            # Create class mask (no masking needed for binary)
+            if class_mask is not None:
+                class_mask.append([0, 1])
+            
+            # Create dataloaders
+            if args.distributed and utils.get_world_size() > 1:
+                sampler_train = torch.utils.data.DistributedSampler(task_train, shuffle=True)
+                sampler_val = torch.utils.data.SequentialSampler(task_val)
+            else:
+                sampler_train = torch.utils.data.RandomSampler(task_train)
+                sampler_val = torch.utils.data.SequentialSampler(task_val)
+            
+            data_loader_train = torch.utils.data.DataLoader(
+                task_train, sampler=sampler_train, batch_size=args.batch_size,
+                num_workers=args.num_workers, pin_memory=args.pin_mem,
+            )
+            data_loader_val = torch.utils.data.DataLoader(
+                task_val, sampler=sampler_val, batch_size=args.batch_size,
+                num_workers=args.num_workers, pin_memory=args.pin_mem,
+            )
+            
+            dataloader.append({'train': data_loader_train, 'val': data_loader_val})
+        
+        return dataloader, class_mask
+        
+    elif args.dataset.startswith('Split-'):
+        # Original Split- handling...
         dataset_train, dataset_val = get_dataset(args.dataset.replace('Split-',''), transform_train, transform_val, args)
-
         args.nb_classes = len(dataset_val.classes)
-
         splited_dataset, class_mask = split_single_dataset(dataset_train, dataset_val, args)
     else:
+        # Original multi-dataset handling...
         if args.dataset == '5-datasets':
             dataset_list = ['SVHN', 'MNIST', 'CIFAR10', 'NotMNIST', 'FashionMNIST']
         else:
@@ -52,18 +95,19 @@ def build_continual_dataloader(args):
         if args.shuffle:
             random.shuffle(dataset_list)
         print(dataset_list)
-    
+        
         args.nb_classes = 0
 
+    # Continue with original logic for non-Deepfake datasets
     for i in range(args.num_tasks):
         if args.dataset.startswith('Split-'):
             dataset_train, dataset_val = splited_dataset[i]
-
+        elif args.dataset == 'Deepfake':
+            continue  # Already handled above
         else:
             dataset_train, dataset_val = get_dataset(dataset_list[i], transform_train, transform_val, args)
-
             transform_target = Lambda(target_transform, args.nb_classes)
-
+            
             if class_mask is not None:
                 class_mask.append([i + args.nb_classes for i in range(len(dataset_val.classes))])
                 args.nb_classes += len(dataset_val.classes)
@@ -73,31 +117,21 @@ def build_continual_dataloader(args):
                 dataset_val.target_transform = transform_target
         
         if args.distributed and utils.get_world_size() > 1:
-            num_tasks = utils.get_world_size()
-            global_rank = utils.get_rank()
-
-            sampler_train = torch.utils.data.DistributedSampler(
-                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True)
-            
+            sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=True)
             sampler_val = torch.utils.data.SequentialSampler(dataset_val)
         else:
             sampler_train = torch.utils.data.RandomSampler(dataset_train)
             sampler_val = torch.utils.data.SequentialSampler(dataset_val)
         
         data_loader_train = torch.utils.data.DataLoader(
-            dataset_train, sampler=sampler_train,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            pin_memory=args.pin_mem,
+            dataset_train, sampler=sampler_train, batch_size=args.batch_size,
+            num_workers=args.num_workers, pin_memory=args.pin_mem,
         )
-
         data_loader_val = torch.utils.data.DataLoader(
-            dataset_val, sampler=sampler_val,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            pin_memory=args.pin_mem,
+            dataset_val, sampler=sampler_val, batch_size=args.batch_size,
+            num_workers=args.num_workers, pin_memory=args.pin_mem,
         )
-
+        
         dataloader.append({'train': data_loader_train, 'val': data_loader_val})
 
     return dataloader, class_mask

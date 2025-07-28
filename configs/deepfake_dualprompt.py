@@ -51,7 +51,7 @@ def get_args_parser(subparsers):
 
     # Data parameters - Deepfake specific
     subparsers.add_argument('--data-path', default='/path/to/deepfake/data', type=str, help='deepfake dataset path')
-    subparsers.add_argument('--dataset', default='Split-Deepfake', type=str, help='dataset name')
+    subparsers.add_argument('--dataset', default='Deepfake', type=str, help='dataset name')
     subparsers.add_argument('--shuffle', default=False, help='shuffle the data order')
     subparsers.add_argument('--output_dir', default='./output', help='path where to save, empty for no saving')
     subparsers.add_argument('--device', default='cuda', help='device to use for training / testing')
@@ -70,10 +70,14 @@ def get_args_parser(subparsers):
     subparsers.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     # Continual learning parameters
-    subparsers.add_argument('--num_tasks', default=2, type=int, help='number of sequential tasks (deepfake generation methods)')
-    subparsers.add_argument('--deepfake_tasks', default=['biggan', 'gaugan'], type=str, nargs='+', help='list of deepfake tasks to use for training')
+    subparsers.add_argument('--num_tasks', default=2, type=int, help='number of sequential tasks')
+    subparsers.add_argument('--deepfake_tasks', default=['biggan', 'gaugan'], type=str, nargs='+', help='list of deepfake tasks')
     subparsers.add_argument('--train_mask', default=True, type=bool, help='if using the class mask at training')
-    subparsers.add_argument('--task_inc', default=False, type=bool, help='if doing task incremental learning')
+    subparsers.add_argument('--task_inc', default=True, type=bool, help='if doing task incremental learning')
+    
+    # Binary evaluation for deepfake datasets
+    subparsers.add_argument('--class_num_binary', default=2, type=int, help='number of classes for binary evaluation (2 for real/fake)')
+    subparsers.add_argument('--nb_classes_per_task', default=2, type=int, help='classes per task (2 for real/fake)')
 
     # G-Prompt parameters
     subparsers.add_argument('--use_g_prompt', default=True, type=bool, help='if using G-Prompt')
